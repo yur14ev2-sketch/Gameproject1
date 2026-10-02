@@ -39,7 +39,6 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
             playerCollider.sharedMaterial = noFrictionMaterial;
 
         SetControlEnabled(false, null);
-        gameObject.SetActive(false);
     }
 
     private void Update()
@@ -115,10 +114,24 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
                                    : RigidbodyConstraints.FreezePositionX);
         }
 
-        body.velocity = Vector3.zero;
-        body.angularVelocity = Vector3.zero;
-        body.isKinematic = !enabled;
-        body.useGravity = enabled;
+        if (enabled)
+        {
+            body.isKinematic = false;
+            body.useGravity = true;
+            body.velocity = Vector3.zero;
+            body.angularVelocity = Vector3.zero;
+        }
+        else
+        {
+            if (!body.isKinematic)
+            {
+                body.velocity = Vector3.zero;
+                body.angularVelocity = Vector3.zero;
+            }
+
+            body.useGravity = false;
+            body.isKinematic = true;
+        }
     }
 
     private void OnCollisionEnter(Collision collision) => EvaluateGround(collision);

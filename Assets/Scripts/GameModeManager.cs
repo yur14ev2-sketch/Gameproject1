@@ -16,6 +16,7 @@ public sealed class GameModeManager : MonoBehaviour
     [Header("Player Systems")]
     [SerializeField] private GameObject roomPlayerSystem;
     [SerializeField] private Transform roomPlayer;
+    [SerializeField] private Camera roomCamera;
     [Tooltip("The single editable 2D physics player shown in the Hierarchy.")]
     [SerializeField] private PlayerMovement paintingPlayer;
     [SerializeField] private PaintingEntry[] paintings;
@@ -25,7 +26,13 @@ public sealed class GameModeManager : MonoBehaviour
     [SerializeField, Min(0f)] private float interactionDistance = 75f;
 
     public bool IsInsidePainting { get; private set; }
+    public Camera RoomCamera => roomCamera;
     private PaintingEntry activePainting;
+
+    private void Awake()
+    {
+        ResolveRoomCamera();
+    }
 
     private void OnEnable()
     {
@@ -99,6 +106,7 @@ public sealed class GameModeManager : MonoBehaviour
 
     private void ApplyRoomMode()
     {
+        ResolveRoomCamera();
         IsInsidePainting = false;
         activePainting = null;
 
@@ -112,11 +120,14 @@ public sealed class GameModeManager : MonoBehaviour
         if (paintingPlayer != null)
             paintingPlayer.gameObject.SetActive(false);
 
+        SetExclusiveCamera(roomCamera);
+
         Debug.Log("[GameMode] Room mode enforced: 3D player active, every 2D painting player inactive.", this);
     }
 
     private void ApplyPaintingMode(PaintingEntry painting)
     {
+        ResolveRoomCamera();
         IsInsidePainting = true;
         activePainting = painting;
 
@@ -141,6 +152,8 @@ public sealed class GameModeManager : MonoBehaviour
         if (painting.paintingCamera != null)
             painting.paintingCamera.gameObject.SetActive(true);
 
+        SetExclusiveCamera(painting.paintingCamera);
+
         SetPaintingPlayersControl(painting, true);
 
         if (selectedPlayer != null)
@@ -159,7 +172,23 @@ public sealed class GameModeManager : MonoBehaviour
         foreach (PaintingPlayer2DController player in paintingRoot.GetComponentsInChildren<PaintingPlayer2DController>(true))
         {
             if (enabled)
+            {
                 player.gameObject.SetActive(true);
+
+                if (painting.playerSpawnPoint != null)
+                {
+                    Rigidbody body = player.GetComponent<Rigidbody>();
+                    player.transform.SetPositionAndRotation(
+                        painting.playerSpawnPoint.position,
+                        painting.playerSpawnPoint.rotation);
+
+                    if (body != null)
+                    {
+                        body.position = painting.playerSpawnPoint.position;
+                        body.rotation = painting.playerSpawnPoint.rotation;
+                    }
+                }
+            }
 
             player.SetControlEnabled(enabled, painting.paintingCamera);
 
@@ -272,6 +301,39 @@ public sealed class GameModeManager : MonoBehaviour
             if (painting?.paintingCamera != null)
                 painting.paintingCamera.gameObject.SetActive(active);
         }
+    }
+
+    private void ResolveRoomCamera()
+    {
+        if (roomCamera == null && roomPlayerSystem != null)
+            roomCamera = roomPlayerSystem.GetComponentInChildren<Camera>(true);
+    }
+
+    private void SetExclusiveCamera(Camera target)
+    {
+        SetCameraActive(roomCamera, target == roomCamera);
+
+        if (paintings != null)
+        {
+            foreach (PaintingEntry painting in paintings)
+            {
+                if (painting?.paintingCamera != null)
+                    SetCameraActive(painting.paintingCamera, painting.paintingCamera == target);
+            }
+        }
+    }
+
+    private static void SetCameraActive(Camera camera, bool active)
+    {
+        if (camera == null)
+            return;
+
+        camera.gameObject.SetActive(active);
+        camera.enabled = active;
+
+        AudioListener listener = camera.GetComponent<AudioListener>();
+        if (listener != null)
+            listener.enabled = active;
     }
 
     private static void SetAllPaintingPlayersActive(bool active)

@@ -8,6 +8,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
     [SerializeField] private KeyCode projectionKey = KeyCode.P;
 
     [Header("Paint 2 Output")]
+    [SerializeField] private Transform projectionObjectsRoot;
     [SerializeField] private Camera paint2Camera;
     [SerializeField] private Transform paint2Model;
     [SerializeField] private Transform projectionArea;
@@ -40,6 +41,9 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
     private void ResolveReferences()
     {
+        if (projectionObjectsRoot == null)
+            projectionObjectsRoot = FindSceneTransform("Projection Objects");
+
         Transform paint2 = FindSceneTransform("paint2");
         if (paint2 != null)
         {
@@ -72,8 +76,8 @@ public sealed class Paint2ProjectionController : MonoBehaviour
     private void ProjectVisibleSources()
     {
         ResolveReferences();
-        Camera roomCamera = Camera.main;
-        if (roomCamera == null || paint2Camera == null || paint2Model == null || projectedObjectsRoot == null)
+        Camera roomCamera = gameModeManager != null ? gameModeManager.RoomCamera : null;
+        if (roomCamera == null || projectionObjectsRoot == null || paint2Camera == null || paint2Model == null || projectedObjectsRoot == null)
         {
             Debug.LogError("[Paint2 Projection] Required room camera or Paint 2 references are missing.", this);
             return;
@@ -95,9 +99,18 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         ClearPreviousProjection();
         int projectedCount = 0;
 
-        foreach (ProjectionSource source in Resources.FindObjectsOfTypeAll<ProjectionSource>())
+        for (int sourceIndex = 0; sourceIndex < projectionObjectsRoot.childCount; sourceIndex++)
         {
-            if (!source.gameObject.scene.IsValid() || !source.ProjectionEnabled || !source.TryGetWorldBounds(out Bounds sourceBounds))
+            Transform sourceTransform = projectionObjectsRoot.GetChild(sourceIndex);
+            if (!sourceTransform.gameObject.activeInHierarchy)
+                continue;
+
+            ProjectionSource settings = sourceTransform.GetComponent<ProjectionSource>();
+            if (settings != null && !settings.ProjectionEnabled)
+                continue;
+
+            Transform modelRoot = settings != null ? settings.ModelRoot : sourceTransform;
+            if (!TryCalculateRendererBounds(modelRoot, out Bounds sourceBounds))
                 continue;
 
             Rect sourceRect = BoundsToViewportRect(roomCamera, sourceBounds, out bool sourceInFront);
@@ -108,19 +121,26 @@ public sealed class Paint2ProjectionController : MonoBehaviour
             if (overlap.width <= 0.001f || overlap.height <= 0.001f)
                 continue;
 
-            if (CreateProjectedMesh(source, roomCamera, paintRect, paintBounds))
+            Color color = settings != null ? settings.SilhouetteColor : new Color(0.08f, 0.08f, 0.08f, 1f);
+            bool generateCollider = settings == null || settings.GenerateCollider;
+            Vector3 positionOffset = settings != null ? settings.PositionOffset : Vector3.zero;
+            if (CreateProjectedMesh(modelRoot, sourceTransform.name, color, generateCollider, positionOffset, roomCamera, paintRect, paintBounds))
                 projectedCount++;
         }
 
         Debug.Log(
             projectedCount > 0
                 ? $"[Paint2 Projection] P projected {projectedCount} object(s) into Paint 2."
-                : "[Paint2 Projection] P detected, but no ProjectionSource overlapped Paint 2.",
+                : "[Paint2 Projection] P detected, but no Projection Object overlapped Paint 2.",
             this);
     }
 
     private bool CreateProjectedMesh(
-        ProjectionSource source,
+        Transform sourceRoot,
+        string sourceName,
+        Color silhouetteColor,
+        bool generateCollider,
+        Vector3 positionOffset,
         Camera roomCamera,
         Rect paintRect,
         Bounds paintBounds)
@@ -128,7 +148,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         var worldVertices = new List<Vector3>();
         var triangles = new List<int>();
 
-        foreach (MeshFilter meshFilter in source.ModelRoot.GetComponentsInChildren<MeshFilter>(true))
+        foreach (MeshFilter meshFilter in sourceRoot.GetComponentsInChildren<MeshFilter>(true))
         {
             Mesh mesh = meshFilter.sharedMesh;
             if (mesh == null)
@@ -159,7 +179,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
                 int first = worldVertices.Count;
                 foreach (Vector2 point in clipped)
-                    worldVertices.Add(MapViewportPointToPaintPlane(point, paintRect, paintBounds, source.PositionOffset));
+                    worldVertices.Add(MapViewportPointToPaintPlane(point, paintRect, paintBounds, positionOffset));
 
                 for (int vertex = 1; vertex < clipped.Count - 1; vertex++)
                 {
@@ -173,14 +193,14 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         if (triangles.Count == 0)
             return false;
 
-        GameObject silhouette = new GameObject($"Projected_{source.name}");
+        GameObject silhouette = new GameObject($"Projected_{sourceName}");
         silhouette.transform.SetParent(projectedObjectsRoot, false);
 
         Vector3[] localVertices = new Vector3[worldVertices.Count];
         for (int i = 0; i < worldVertices.Count; i++)
             localVertices[i] = projectedObjectsRoot.InverseTransformPoint(worldVertices[i]);
 
-        Mesh visualMesh = new Mesh { name = $"{source.name}_ProjectedVisual" };
+        Mesh visualMesh = new Mesh { name = $"{sourceName}_ProjectedVisual" };
         visualMesh.SetVertices(localVertices);
         visualMesh.SetTriangles(triangles, 0);
         visualMesh.RecalculateNormals();
@@ -190,11 +210,11 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         outputFilter.sharedMesh = visualMesh;
         MeshRenderer outputRenderer = silhouette.AddComponent<MeshRenderer>();
         Shader shader = Shader.Find("Universal Render Pipeline/Unlit") ?? Shader.Find("Standard");
-        Material material = new Material(shader) { color = source.SilhouetteColor };
+        Material material = new Material(shader) { color = silhouetteColor };
         outputRenderer.sharedMaterial = material;
         runtimeMaterials.Add(material);
 
-        if (source.GenerateCollider)
+        if (generateCollider)
         {
             Mesh collisionMesh = BuildExtrudedCollisionMesh(localVertices, triangles, projectedObjectsRoot.InverseTransformDirection(paint2Camera.transform.forward));
             MeshCollider meshCollider = silhouette.AddComponent<MeshCollider>();
@@ -476,6 +496,31 @@ public sealed class Paint2ProjectionController : MonoBehaviour
                 return candidate;
         }
         return null;
+    }
+
+    private static bool IsInsidePaintingHierarchy(Transform candidate)
+    {
+        for (Transform current = candidate; current != null; current = current.parent)
+        {
+            string normalizedName = current.name.Replace(" ", string.Empty).ToLowerInvariant();
+            if (normalizedName.StartsWith("paint") && normalizedName.Length > 5)
+            {
+                bool numericSuffix = true;
+                for (int i = 5; i < normalizedName.Length; i++)
+                {
+                    if (!char.IsDigit(normalizedName[i]))
+                    {
+                        numericSuffix = false;
+                        break;
+                    }
+                }
+
+                if (numericSuffix)
+                    return true;
+            }
+        }
+
+        return false;
     }
 
     private void OnDestroy()

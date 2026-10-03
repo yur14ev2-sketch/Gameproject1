@@ -986,8 +986,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 185248921}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: 0.7071068, z: -0.7071068, w: 0}
-  m_LocalPosition: {x: -88.5, y: 97.4, z: -0.00000004967054}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: -88.5, y: 103, z: -0.00000004967054}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -4041,7 +4041,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 795403155}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.7071068, y: -0, z: -0, w: 0.7071068}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: -84, y: 71.5, z: -0.000020345053}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -5249,7 +5249,6 @@ MonoBehaviour:
   popHeight: 7
   riseDuration: 0.35
   fallDuration: 0.3
-  usedBlockColor: {r: 0.42, g: 0.42, b: 0.42, a: 1}
 --- !u!114 &932708910
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -5376,7 +5375,7 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 942108173}
   serializedVersion: 2
-  m_LocalRotation: {x: 0.000000029802322, y: 0.7071068, z: -0.7071068, w: 0.000000029802322}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
   m_LocalPosition: {x: -84.00003, y: 71.5, z: -0.000030517578}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
@@ -5407,8 +5406,8 @@ Transform:
   m_PrefabAsset: {fileID: 0}
   m_GameObject: {fileID: 947331601}
   serializedVersion: 2
-  m_LocalRotation: {x: -0, y: 0.7071068, z: -0.7071068, w: 0}
-  m_LocalPosition: {x: 2, y: -29.5, z: -0.00000004967054}
+  m_LocalRotation: {x: -0, y: -0, z: -0, w: 1}
+  m_LocalPosition: {x: 2, y: -6.000001, z: -0.00000004967054}
   m_LocalScale: {x: 1, y: 1, z: 1}
   m_ConstrainProportionsScale: 0
   m_Children: []
@@ -13164,8 +13163,6 @@ MonoBehaviour:
   roomPlayerSystem: {fileID: 2100000100}
   roomPlayer: {fileID: 1039542176}
   roomCamera: {fileID: 2100000112}
-  paintingPlayerPrefab: {fileID: 3483203833911520468, guid: e980be811d7aac046bb0d23ee8228d47,
-    type: 3}
   paintings:
   - paintingName: Paint 1
     interactionPoint: {fileID: 1908719863}
@@ -13250,7 +13247,7 @@ MonoBehaviour:
   m_Name: 
   m_EditorClassIdentifier: 
   projectionKey: 112
-  projectionObjectsRoot: {fileID: 258875116}
+  projectionObjectsRoot: {fileID: 0}
   paint2Camera: {fileID: 748462955}
   paint2Model: {fileID: 671258794}
   projectionArea: {fileID: 882064221}

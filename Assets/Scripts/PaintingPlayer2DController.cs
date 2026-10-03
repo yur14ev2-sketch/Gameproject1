@@ -15,6 +15,8 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     private Vector3 movementAxis = Vector3.right;
     private float horizontalInput;
     private bool jumpRequested;
+    private bool isRising;
+    private bool ceilingHitRequested;
     private bool controlEnabled;
     private PhysicMaterial noFrictionMaterial;
     private float blockedTimer;
@@ -69,7 +71,30 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
         if (jumpRequested && groundContacts.Count > 0)
         {
             velocity.y = Mathf.Sqrt(2f * Mathf.Abs(Physics.gravity.y) * jumpHeight);
+            isRising = true;
+            ceilingHitRequested = false;
             groundContacts.Clear();
+        }
+
+        if (isRising)
+        {
+            if (TryHitQuestionBlock(out Collider questionBlock))
+            {
+                TryActivateQuestionBlock(questionBlock);
+                velocity.y = Mathf.Min(velocity.y, 0f);
+                isRising = false;
+                ceilingHitRequested = false;
+            }
+            else if (ceilingHitRequested)
+            {
+                velocity.y = Mathf.Min(velocity.y, 0f);
+                isRising = false;
+                ceilingHitRequested = false;
+            }
+            else if (velocity.y <= 0f)
+            {
+                isRising = false;
+            }
         }
 
         body.velocity = velocity;
@@ -101,6 +126,8 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
         groundContacts.Clear();
         contactNormals.Clear();
         blockedTimer = 0f;
+        isRising = false;
+        ceilingHitRequested = false;
 
         if (enabled && paintingCamera != null)
         {
@@ -120,9 +147,11 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
             body.useGravity = true;
             body.velocity = Vector3.zero;
             body.angularVelocity = Vector3.zero;
+            RegisterWithCoinSystems();
         }
         else
         {
+            UnregisterFromCoinSystems();
             if (!body.isKinematic)
             {
                 body.velocity = Vector3.zero;
@@ -157,6 +186,9 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
             {
                 grounded = true;
             }
+
+            if (isRising && normal.y < -0.5f)
+                ceilingHitRequested = true;
         }
 
         contactNormals[collision.collider] = strongestNormal;
@@ -185,7 +217,99 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
 
     private void OnDestroy()
     {
+        UnregisterFromCoinSystems();
+
         if (noFrictionMaterial != null)
             Destroy(noFrictionMaterial);
+    }
+
+    private bool TryHitQuestionBlock(out Collider selectedBlock)
+    {
+        selectedBlock = null;
+        Collider playerCollider = GetComponent<Collider>();
+
+        if (playerCollider == null)
+            return false;
+
+        Bounds bounds = playerCollider.bounds;
+        Vector3 halfExtents = bounds.extents;
+        halfExtents.x = Mathf.Max(0.01f, halfExtents.x * 0.8f);
+        halfExtents.z = Mathf.Max(0.01f, halfExtents.z * 0.8f);
+        halfExtents.y = 0.02f;
+
+        Vector3 origin = new Vector3(
+            bounds.center.x,
+            bounds.max.y - 0.01f,
+            bounds.center.z);
+        float castDistance = Mathf.Max(0.12f, body.velocity.y * Time.fixedDeltaTime + 0.08f);
+        RaycastHit[] hits = Physics.BoxCastAll(
+            origin,
+            halfExtents,
+            Vector3.up,
+            Quaternion.identity,
+            castDistance,
+            ~0,
+            QueryTriggerInteraction.Ignore);
+
+        float nearestDistance = float.PositiveInfinity;
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider hitCollider = hits[i].collider;
+
+            if (hitCollider == null || hitCollider.transform.IsChildOf(transform))
+                continue;
+
+            string normalizedName =
+                hitCollider.name.Replace(" ", "").ToLowerInvariant();
+
+            if (!normalizedName.StartsWith("questionblock"))
+                continue;
+
+            if (hits[i].distance < nearestDistance)
+            {
+                nearestDistance = hits[i].distance;
+                selectedBlock = hitCollider;
+            }
+        }
+
+        return selectedBlock != null;
+    }
+
+    private void TryActivateQuestionBlock(Collider questionBlock)
+    {
+        CoinSystem[] coinSystems = FindObjectsOfType<CoinSystem>(true);
+
+        for (int i = 0; i < coinSystems.Length; i++)
+        {
+            if (coinSystems[i].TryPopCoin(questionBlock))
+                return;
+        }
+    }
+
+    private void RegisterWithCoinSystems()
+    {
+        Collider playerCollider = GetComponent<Collider>();
+
+        if (playerCollider == null)
+            return;
+
+        CoinSystem[] coinSystems = FindObjectsOfType<CoinSystem>(true);
+
+        for (int i = 0; i < coinSystems.Length; i++)
+            coinSystems[i].RegisterPlayer(playerCollider);
+    }
+
+    private void UnregisterFromCoinSystems()
+    {
+        Collider playerCollider = GetComponent<Collider>();
+
+        if (playerCollider == null)
+            return;
+
+        CoinSystem[] coinSystems = FindObjectsOfType<CoinSystem>(true);
+
+        for (int i = 0; i < coinSystems.Length; i++)
+            coinSystems[i].UnregisterPlayer(playerCollider);
     }
 }

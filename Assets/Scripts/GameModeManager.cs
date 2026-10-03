@@ -10,15 +10,14 @@ public sealed class GameModeManager : MonoBehaviour
         public Transform interactionPoint;
         public GameObject playerSystem;
         public Camera paintingCamera;
-        public Transform playerSpawnPoint;
     }
 
     [Header("Player Systems")]
     [SerializeField] private GameObject roomPlayerSystem;
     [SerializeField] private Transform roomPlayer;
     [SerializeField] private Camera roomCamera;
-    [Tooltip("The single editable 2D physics player shown in the Hierarchy.")]
-    [SerializeField] private PlayerMovement paintingPlayer;
+    [Tooltip("The single prefab instantiated when entering any painting.")]
+    [SerializeField] private GameObject paintingPlayerPrefab;
     [SerializeField] private PaintingEntry[] paintings;
 
     [Header("Painting Interaction")]
@@ -28,6 +27,7 @@ public sealed class GameModeManager : MonoBehaviour
     public bool IsInsidePainting { get; private set; }
     public Camera RoomCamera => roomCamera;
     private PaintingEntry activePainting;
+    private GameObject activePaintingPlayer;
 
     private void Awake()
     {
@@ -109,16 +109,13 @@ public sealed class GameModeManager : MonoBehaviour
         ResolveRoomCamera();
         IsInsidePainting = false;
         activePainting = null;
+        DestroyActivePaintingPlayer();
 
         if (roomPlayerSystem != null)
             roomPlayerSystem.SetActive(true);
 
         SetAllPaintingSystemsActive(false);
         SetAllPaintingPlayersActive(false);
-        SetAllNewPaintingPlayersState(false, null);
-
-        if (paintingPlayer != null)
-            paintingPlayer.gameObject.SetActive(false);
 
         SetExclusiveCamera(roomCamera);
 
@@ -136,156 +133,71 @@ public sealed class GameModeManager : MonoBehaviour
 
         SetAllPaintingSystemsActive(false);
         SetAllPaintingPlayersActive(false);
-        if (painting.playerSystem != null)
-            painting.playerSystem.SetActive(true);
-
-        PlayerMovement selectedPlayer = paintingPlayer != null
-            ? paintingPlayer
-            : ResolvePaintingPlayer(painting);
-        if (selectedPlayer != null)
-        {
-            ResetPaintingPlayer(painting, selectedPlayer);
-            selectedPlayer.ConfigureForCamera(painting.paintingCamera);
-            selectedPlayer.gameObject.SetActive(true);
-        }
-
         if (painting.paintingCamera != null)
             painting.paintingCamera.gameObject.SetActive(true);
 
         SetExclusiveCamera(painting.paintingCamera);
-
-        SetPaintingPlayersControl(painting, true);
-
-        if (selectedPlayer != null)
-            LogPaintingPlayerState(painting, selectedPlayer);
+        SpawnPaintingPlayer(painting);
     }
 
-    private static void SetPaintingPlayersControl(PaintingEntry painting, bool enabled)
+    private void SpawnPaintingPlayer(PaintingEntry painting)
     {
-        if (painting?.interactionPoint == null)
-            return;
+        DestroyActivePaintingPlayer();
 
-        Transform paintingRoot = painting.interactionPoint.parent;
-        if (paintingRoot == null)
-            return;
-
-        foreach (PaintingPlayer2DController player in paintingRoot.GetComponentsInChildren<PaintingPlayer2DController>(true))
+        if (paintingPlayerPrefab == null)
         {
-            if (enabled)
-            {
-                player.gameObject.SetActive(true);
-
-                if (painting.playerSpawnPoint != null)
-                {
-                    Rigidbody body = player.GetComponent<Rigidbody>();
-                    player.transform.SetPositionAndRotation(
-                        painting.playerSpawnPoint.position,
-                        painting.playerSpawnPoint.rotation);
-
-                    if (body != null)
-                    {
-                        body.position = painting.playerSpawnPoint.position;
-                        body.rotation = painting.playerSpawnPoint.rotation;
-                    }
-                }
-            }
-
-            player.SetControlEnabled(enabled, painting.paintingCamera);
-
-            if (!enabled)
-                player.gameObject.SetActive(false);
-        }
-    }
-
-    private static void SetAllNewPaintingPlayersState(bool enabled, Camera paintingCamera)
-    {
-        foreach (PaintingPlayer2DController player in Resources.FindObjectsOfTypeAll<PaintingPlayer2DController>())
-        {
-            if (player.gameObject.scene.IsValid())
-            {
-                if (enabled)
-                    player.gameObject.SetActive(true);
-
-                player.SetControlEnabled(enabled, paintingCamera);
-
-                if (!enabled)
-                    player.gameObject.SetActive(false);
-            }
-        }
-    }
-
-    private void LogPaintingPlayerState(PaintingEntry painting, PlayerMovement player)
-    {
-        if (player == null)
-        {
-            Debug.LogError($"[GameMode] {painting.paintingName}: no PlayerMovement exists under the assigned player system.", this);
+            Debug.LogError("[GameMode] Player_2D prefab is not assigned.", this);
             return;
         }
 
-        Renderer visual = player.GetComponentInChildren<Renderer>(true);
-        Vector3 viewport = painting.paintingCamera != null
-            ? painting.paintingCamera.WorldToViewportPoint(visual != null ? visual.bounds.center : player.transform.position)
-            : new Vector3(float.NaN, float.NaN, float.NaN);
+        Transform anchor = painting.interactionPoint != null
+            ? painting.interactionPoint.Find("Player2DAnchor")
+            : null;
+        if (anchor == null)
+        {
+            Debug.LogError($"[GameMode] {painting.paintingName} has no Player2DAnchor.", this);
+            return;
+        }
 
+        activePaintingPlayer = Instantiate(
+            paintingPlayerPrefab,
+            anchor.position,
+            anchor.rotation);
+        activePaintingPlayer.name = "Player_2D_Runtime";
+
+        PaintingPlayer2DController controller =
+            activePaintingPlayer.GetComponent<PaintingPlayer2DController>();
+        if (controller == null)
+        {
+            Debug.LogError("[GameMode] Player_2D prefab requires PaintingPlayer2DController.", activePaintingPlayer);
+            DestroyActivePaintingPlayer();
+            return;
+        }
+
+        controller.SetControlEnabled(true, painting.paintingCamera);
         Debug.Log(
-            $"[GameMode] {painting.paintingName} player check: " +
-            $"active={player.gameObject.activeInHierarchy}, position={player.transform.position}, " +
-            $"lossyScale={player.transform.lossyScale}, renderer={(visual != null && visual.enabled)}, " +
-            $"viewport={viewport}.",
-            player);
+            $"[GameMode] Spawned the only Player_2D at {painting.paintingName}/Player2DAnchor.",
+            activePaintingPlayer);
     }
 
-    private PlayerMovement ResolvePaintingPlayer(PaintingEntry painting)
+    private void DestroyActivePaintingPlayer()
     {
-        if (painting.playerSystem == null)
-            return null;
-
-        PlayerMovement movement = painting.playerSystem.GetComponentInChildren<PlayerMovement>(true);
-        if (movement != null || painting.playerSpawnPoint == null)
-            return movement;
-
-        float nearestDistance = float.PositiveInfinity;
-        foreach (PlayerMovement candidate in Resources.FindObjectsOfTypeAll<PlayerMovement>())
-        {
-            if (!candidate.gameObject.scene.IsValid())
-                continue;
-
-            float distance = (candidate.transform.position - painting.playerSpawnPoint.position).sqrMagnitude;
-            if (distance < nearestDistance)
-            {
-                nearestDistance = distance;
-                movement = candidate;
-            }
-        }
-
-        if (movement != null)
-        {
-            movement.transform.SetParent(painting.playerSystem.transform, true);
-            Debug.LogWarning(
-                $"[GameMode] {painting.paintingName}: repaired orphaned player '{movement.name}' and attached it to '{painting.playerSystem.name}'.",
-                movement);
-        }
-
-        return movement;
-    }
-
-    private static void ResetPaintingPlayer(PaintingEntry painting, PlayerMovement movement)
-    {
-        if (painting.playerSpawnPoint == null || movement == null)
+        if (activePaintingPlayer == null)
             return;
 
-        Rigidbody body = movement.GetComponent<Rigidbody>();
-        movement.transform.SetPositionAndRotation(
-            painting.playerSpawnPoint.position,
-            painting.playerSpawnPoint.rotation);
+        PaintingPlayer2DController controller =
+            activePaintingPlayer.GetComponent<PaintingPlayer2DController>();
+        if (controller != null)
+            controller.SetControlEnabled(false, null);
 
-        if (body != null)
-        {
-            body.position = painting.playerSpawnPoint.position;
-            body.rotation = painting.playerSpawnPoint.rotation;
-            body.velocity = Vector3.zero;
-            body.angularVelocity = Vector3.zero;
-        }
+        activePaintingPlayer.SetActive(false);
+        Destroy(activePaintingPlayer);
+        activePaintingPlayer = null;
+    }
+
+    private void OnDestroy()
+    {
+        DestroyActivePaintingPlayer();
     }
 
     private void SetAllPaintingSystemsActive(bool active)

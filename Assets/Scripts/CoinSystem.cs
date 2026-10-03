@@ -9,6 +9,9 @@ public sealed class CoinSystem : MonoBehaviour
     [SerializeField, Min(0.01f)] private float riseDuration = 0.35f;
     [SerializeField, Min(0.01f)] private float fallDuration = 0.3f;
 
+    [Header("Question Block Used State")]
+    [SerializeField] private Color usedBlockColor = new Color(0.42f, 0.42f, 0.42f, 1f);
+
     private sealed class CoinEntry
     {
         public Transform Coin;
@@ -75,8 +78,20 @@ public sealed class CoinSystem : MonoBehaviour
             return false;
 
         entry.HasPopped = true;
+        SetQuestionBlockUsed(entry);
         StartCoroutine(PopCoin(entry));
         return true;
+    }
+
+    public void RegisterPlayer(Collider runtimePlayerCollider)
+    {
+        playerCollider = runtimePlayerCollider;
+    }
+
+    public void UnregisterPlayer(Collider runtimePlayerCollider)
+    {
+        if (playerCollider == runtimePlayerCollider)
+            playerCollider = null;
     }
 
     private void FixedUpdate()
@@ -286,6 +301,22 @@ public sealed class CoinSystem : MonoBehaviour
     {
         for (int i = 0; i < entry.Colliders.Length; i++)
             entry.Colliders[i].enabled = enabledState;
+    }
+
+    private void SetQuestionBlockUsed(CoinEntry entry)
+    {
+        Renderer[] renderers =
+            entry.QuestionBlock.GetComponentsInChildren<Renderer>(true);
+
+        for (int i = 0; i < renderers.Length; i++)
+        {
+            Material material = renderers[i].material;
+
+            if (material.HasProperty("_BaseColor"))
+                material.SetColor("_BaseColor", usedBlockColor);
+            else if (material.HasProperty("_Color"))
+                material.color = usedBlockColor;
+        }
     }
 
 }

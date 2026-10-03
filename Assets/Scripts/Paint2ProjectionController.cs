@@ -4,6 +4,14 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public sealed class Paint2ProjectionController : MonoBehaviour
 {
+    private sealed class ProjectionTarget
+    {
+        public string Name;
+        public Camera Camera;
+        public Transform Model;
+        public Transform OutputRoot;
+    }
+
     [Header("Input")]
     [SerializeField] private KeyCode projectionKey = KeyCode.P;
 
@@ -18,6 +26,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
     private GameModeManager gameModeManager;
     private readonly List<Material> runtimeMaterials = new List<Material>();
+    private readonly List<ProjectionTarget> projectionTargets = new List<ProjectionTarget>();
 
     private void Awake()
     {
@@ -42,7 +51,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
     private void ResolveReferences()
     {
         if (projectionObjectsRoot == null)
-            projectionObjectsRoot = FindSceneTransform("Projection Objects");
+            projectionObjectsRoot = FindSceneTransform("Furniture");
 
         Transform paint2 = FindSceneTransform("paint2");
         if (paint2 != null)
@@ -71,32 +80,49 @@ public sealed class Paint2ProjectionController : MonoBehaviour
                 }
             }
         }
+
+
+        projectionTargets.Clear();
+        AddProjectionTarget("paint2", "Camera_Paint2", paint2Camera, paint2Model, projectedObjectsRoot);
+        AddProjectionTarget("paint4", "Camera_Paint4", null, null, null);
     }
 
     private void ProjectVisibleSources()
     {
         ResolveReferences();
         Camera roomCamera = gameModeManager != null ? gameModeManager.RoomCamera : null;
-        if (roomCamera == null || projectionObjectsRoot == null || paint2Camera == null || paint2Model == null || projectedObjectsRoot == null)
+        if (roomCamera == null || projectionObjectsRoot == null || projectionTargets.Count == 0)
         {
-            Debug.LogError("[Paint2 Projection] Required room camera or Paint 2 references are missing.", this);
-            return;
-        }
-
-        if (!TryCalculateRendererBounds(paint2Model, out Bounds paintBounds))
-        {
-            Debug.LogError("[Paint2 Projection] Paint 2 Model has no Renderer bounds.", this);
-            return;
-        }
-
-        Rect paintRect = BoundsToViewportRect(roomCamera, paintBounds, out bool paintInFront);
-        if (!paintInFront || !OverlapsScreen(paintRect))
-        {
-            Debug.Log("[Paint2 Projection] P detected, but Paint 2 is not visible from the current room camera.", this);
+            Debug.LogError("[Painting Projection] Required room camera, Furniture, or Paint 2/4 references are missing.", this);
             return;
         }
 
         ClearPreviousProjection();
+        int totalProjectedCount = 0;
+
+        for (int targetIndex = 0; targetIndex < projectionTargets.Count; targetIndex++)
+            totalProjectedCount += ProjectToTarget(projectionTargets[targetIndex], roomCamera);
+
+        Debug.Log(
+            totalProjectedCount > 0
+                ? $"[Painting Projection] P projected {totalProjectedCount} object(s) into Paint 2/4."
+                : "[Painting Projection] P detected, but no Projection Source overlapped Paint 2 or Paint 4.",
+            this);
+    }
+
+    private int ProjectToTarget(ProjectionTarget target, Camera roomCamera)
+    {
+        if (target.Camera == null || target.Model == null || target.OutputRoot == null)
+            return 0;
+
+        if (!TryCalculateRendererBounds(target.Model, out Bounds paintBounds))
+            return 0;
+
+        Rect paintRect = RendererBoundsToViewportRect(
+            roomCamera, target.Model, out bool paintInFront);
+        if (!paintInFront || !OverlapsScreen(paintRect))
+            return 0;
+
         int projectedCount = 0;
 
         for (int sourceIndex = 0; sourceIndex < projectionObjectsRoot.childCount; sourceIndex++)
@@ -106,7 +132,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
                 continue;
 
             ProjectionSource settings = sourceTransform.GetComponent<ProjectionSource>();
-            if (settings != null && !settings.ProjectionEnabled)
+            if (settings == null || !settings.ProjectionEnabled)
                 continue;
 
             Transform modelRoot = settings != null ? settings.ModelRoot : sourceTransform;
@@ -124,15 +150,15 @@ public sealed class Paint2ProjectionController : MonoBehaviour
             Color color = settings != null ? settings.SilhouetteColor : new Color(0.08f, 0.08f, 0.08f, 1f);
             bool generateCollider = settings == null || settings.GenerateCollider;
             Vector3 positionOffset = settings != null ? settings.PositionOffset : Vector3.zero;
-            if (CreateProjectedMesh(modelRoot, sourceTransform.name, color, generateCollider, positionOffset, roomCamera, paintRect, paintBounds))
+            if (CreateProjectedMesh(modelRoot, sourceTransform.name, color, generateCollider, positionOffset,
+                    roomCamera, paintRect, paintBounds, target.Camera, target.Model, target.OutputRoot))
                 projectedCount++;
         }
 
-        Debug.Log(
-            projectedCount > 0
-                ? $"[Paint2 Projection] P projected {projectedCount} object(s) into Paint 2."
-                : "[Paint2 Projection] P detected, but no Projection Object overlapped Paint 2.",
-            this);
+        if (projectedCount > 0)
+            Debug.Log($"[Painting Projection] {target.Name} received {projectedCount} projection(s).", this);
+
+        return projectedCount;
     }
 
     private bool CreateProjectedMesh(
@@ -143,7 +169,10 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         Vector3 positionOffset,
         Camera roomCamera,
         Rect paintRect,
-        Bounds paintBounds)
+        Bounds paintBounds,
+        Camera targetCamera,
+        Transform targetModel,
+        Transform targetOutputRoot)
     {
         var worldVertices = new List<Vector3>();
         var triangles = new List<int>();
@@ -179,7 +208,8 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
                 int first = worldVertices.Count;
                 foreach (Vector2 point in clipped)
-                    worldVertices.Add(MapViewportPointToPaintPlane(point, paintRect, paintBounds, positionOffset));
+                    worldVertices.Add(MapViewportPointToPaintPlane(
+                        point, paintRect, paintBounds, positionOffset, targetCamera, targetModel));
 
                 for (int vertex = 1; vertex < clipped.Count - 1; vertex++)
                 {
@@ -194,11 +224,11 @@ public sealed class Paint2ProjectionController : MonoBehaviour
             return false;
 
         GameObject silhouette = new GameObject($"Projected_{sourceName}");
-        silhouette.transform.SetParent(projectedObjectsRoot, false);
+        silhouette.transform.SetParent(targetOutputRoot, false);
 
         Vector3[] localVertices = new Vector3[worldVertices.Count];
         for (int i = 0; i < worldVertices.Count; i++)
-            localVertices[i] = projectedObjectsRoot.InverseTransformPoint(worldVertices[i]);
+            localVertices[i] = targetOutputRoot.InverseTransformPoint(worldVertices[i]);
 
         Mesh visualMesh = new Mesh { name = $"{sourceName}_ProjectedVisual" };
         visualMesh.SetVertices(localVertices);
@@ -216,7 +246,10 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
         if (generateCollider)
         {
-            Mesh collisionMesh = BuildExtrudedCollisionMesh(localVertices, triangles, projectedObjectsRoot.InverseTransformDirection(paint2Camera.transform.forward));
+            Mesh collisionMesh = BuildExtrudedCollisionMesh(
+                localVertices,
+                triangles,
+                targetOutputRoot.InverseTransformDirection(targetCamera.transform.forward));
             MeshCollider meshCollider = silhouette.AddComponent<MeshCollider>();
             meshCollider.sharedMesh = collisionMesh;
             meshCollider.convex = false;
@@ -229,27 +262,25 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         Vector2 viewportPoint,
         Rect paintRect,
         Bounds paintBounds,
-        Vector3 positionOffset)
+        Vector3 positionOffset,
+        Camera targetCamera,
+        Transform targetModel)
     {
-        Vector3 cameraRight = paint2Camera.transform.right;
-        Vector3 cameraUp = paint2Camera.transform.up;
-        Vector3 cameraForward = paint2Camera.transform.forward;
+        Vector3 cameraRight = targetCamera.transform.right;
+        Vector3 cameraUp = targetCamera.transform.up;
+        Vector3 cameraForward = targetCamera.transform.forward;
         Vector3 paintCenter = paintBounds.center;
-        float minRight = float.PositiveInfinity;
-        float maxRight = float.NegativeInfinity;
-        float minUp = float.PositiveInfinity;
-        float maxUp = float.NegativeInfinity;
-        float nearestDepth = float.PositiveInfinity;
 
-        foreach (Vector3 corner in GetCorners(paintBounds))
-        {
-            Vector3 fromCenter = corner - paintCenter;
-            minRight = Mathf.Min(minRight, Vector3.Dot(fromCenter, cameraRight));
-            maxRight = Mathf.Max(maxRight, Vector3.Dot(fromCenter, cameraRight));
-            minUp = Mathf.Min(minUp, Vector3.Dot(fromCenter, cameraUp));
-            maxUp = Mathf.Max(maxUp, Vector3.Dot(fromCenter, cameraUp));
-            nearestDepth = Mathf.Min(nearestDepth, Vector3.Dot(corner - paint2Camera.transform.position, cameraForward));
-        }
+        if (!TryCalculateCameraAlignedExtents(
+                targetModel,
+                targetCamera,
+                paintCenter,
+                out float minRight,
+                out float maxRight,
+                out float minUp,
+                out float maxUp,
+                out float nearestDepth))
+            return paintCenter + positionOffset;
 
         float u = Mathf.InverseLerp(paintRect.xMin, paintRect.xMax, viewportPoint.x);
         float v = Mathf.InverseLerp(paintRect.yMin, paintRect.yMax, viewportPoint.y);
@@ -257,7 +288,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         u = margin + u * outputViewportScale;
         v = margin + v * outputViewportScale;
 
-        float centerDepth = Vector3.Dot(paintCenter - paint2Camera.transform.position, cameraForward);
+        float centerDepth = Vector3.Dot(paintCenter - targetCamera.transform.position, cameraForward);
         Vector3 planeCenter = paintCenter - cameraForward *
             (centerDepth - nearestDepth + silhouetteDepth * 0.5f + 0.02f);
 
@@ -421,8 +452,15 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
     private void ClearPreviousProjection()
     {
-        for (int i = projectedObjectsRoot.childCount - 1; i >= 0; i--)
-            Destroy(projectedObjectsRoot.GetChild(i).gameObject);
+        for (int targetIndex = 0; targetIndex < projectionTargets.Count; targetIndex++)
+        {
+            Transform outputRoot = projectionTargets[targetIndex].OutputRoot;
+            if (outputRoot == null)
+                continue;
+
+            for (int i = outputRoot.childCount - 1; i >= 0; i--)
+                Destroy(outputRoot.GetChild(i).gameObject);
+        }
 
         foreach (Material material in runtimeMaterials)
         {
@@ -430,6 +468,78 @@ public sealed class Paint2ProjectionController : MonoBehaviour
                 Destroy(material);
         }
         runtimeMaterials.Clear();
+    }
+
+    private void AddProjectionTarget(
+        string paintingName,
+        string cameraName,
+        Camera configuredCamera,
+        Transform configuredModel,
+        Transform configuredOutputRoot)
+    {
+        Transform painting = FindSceneTransform(paintingName);
+        if (painting == null)
+            return;
+
+        Camera targetCamera = configuredCamera != null
+            ? configuredCamera
+            : FindSceneCamera(cameraName);
+        Transform model = configuredModel != null
+            ? configuredModel
+            : painting.Find("Model");
+        if (model == null)
+            model = painting;
+        Transform outputRoot = configuredOutputRoot != null
+            ? configuredOutputRoot
+            : EnsureOutputRoot(painting);
+
+        if (targetCamera == null || model == null || outputRoot == null)
+            return;
+
+        projectionTargets.Add(new ProjectionTarget
+        {
+            Name = paintingName,
+            Camera = targetCamera,
+            Model = model,
+            OutputRoot = outputRoot
+        });
+    }
+
+    private static Transform EnsureOutputRoot(Transform painting)
+    {
+        Transform puzzleRoot = painting.Find("PuzzleRoot");
+        if (puzzleRoot == null)
+        {
+            puzzleRoot = new GameObject("PuzzleRoot").transform;
+            puzzleRoot.SetParent(painting, false);
+        }
+
+        Transform projectionArea = puzzleRoot.Find("ProjectionArea");
+        if (projectionArea == null)
+        {
+            projectionArea = new GameObject("ProjectionArea").transform;
+            projectionArea.SetParent(puzzleRoot, false);
+        }
+
+        Transform outputRoot = projectionArea.Find("ProjectedObjects");
+        if (outputRoot == null)
+        {
+            outputRoot = new GameObject("ProjectedObjects").transform;
+            outputRoot.SetParent(projectionArea, false);
+        }
+
+        return outputRoot;
+    }
+
+    private static Camera FindSceneCamera(string cameraName)
+    {
+        foreach (Camera candidate in Resources.FindObjectsOfTypeAll<Camera>())
+        {
+            if (candidate.gameObject.scene.IsValid() && candidate.name == cameraName)
+                return candidate;
+        }
+
+        return null;
     }
 
     private static Rect BoundsToViewportRect(Camera camera, Bounds bounds, out bool inFront)
@@ -450,6 +560,77 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         }
 
         return Rect.MinMaxRect(min.x, min.y, max.x, max.y);
+    }
+
+    private static Rect RendererBoundsToViewportRect(
+        Camera camera,
+        Transform root,
+        out bool inFront)
+    {
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        Vector3 min = new Vector3(float.PositiveInfinity, float.PositiveInfinity, 0f);
+        Vector3 max = new Vector3(float.NegativeInfinity, float.NegativeInfinity, 0f);
+        inFront = false;
+
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            foreach (Vector3 corner in GetCorners(renderers[rendererIndex].bounds))
+            {
+                Vector3 viewport = camera.WorldToViewportPoint(corner);
+                if (viewport.z > 0f)
+                    inFront = true;
+                min.x = Mathf.Min(min.x, viewport.x);
+                min.y = Mathf.Min(min.y, viewport.y);
+                max.x = Mathf.Max(max.x, viewport.x);
+                max.y = Mathf.Max(max.y, viewport.y);
+            }
+        }
+
+        return renderers.Length > 0
+            ? Rect.MinMaxRect(min.x, min.y, max.x, max.y)
+            : new Rect();
+    }
+
+    private static bool TryCalculateCameraAlignedExtents(
+        Transform root,
+        Camera camera,
+        Vector3 center,
+        out float minRight,
+        out float maxRight,
+        out float minUp,
+        out float maxUp,
+        out float nearestDepth)
+    {
+        minRight = float.PositiveInfinity;
+        maxRight = float.NegativeInfinity;
+        minUp = float.PositiveInfinity;
+        maxUp = float.NegativeInfinity;
+        nearestDepth = float.PositiveInfinity;
+
+        Renderer[] renderers = root.GetComponentsInChildren<Renderer>(true);
+        if (renderers.Length == 0)
+            return false;
+
+        Vector3 cameraRight = camera.transform.right;
+        Vector3 cameraUp = camera.transform.up;
+        Vector3 cameraForward = camera.transform.forward;
+
+        for (int rendererIndex = 0; rendererIndex < renderers.Length; rendererIndex++)
+        {
+            foreach (Vector3 corner in GetCorners(renderers[rendererIndex].bounds))
+            {
+                Vector3 fromCenter = corner - center;
+                minRight = Mathf.Min(minRight, Vector3.Dot(fromCenter, cameraRight));
+                maxRight = Mathf.Max(maxRight, Vector3.Dot(fromCenter, cameraRight));
+                minUp = Mathf.Min(minUp, Vector3.Dot(fromCenter, cameraUp));
+                maxUp = Mathf.Max(maxUp, Vector3.Dot(fromCenter, cameraUp));
+                nearestDepth = Mathf.Min(
+                    nearestDepth,
+                    Vector3.Dot(corner - camera.transform.position, cameraForward));
+            }
+        }
+
+        return true;
     }
 
     private static IEnumerable<Vector3> GetCorners(Bounds bounds)

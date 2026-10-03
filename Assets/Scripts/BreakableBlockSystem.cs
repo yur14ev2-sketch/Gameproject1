@@ -17,12 +17,20 @@ public sealed class BreakableBlockSystem : MonoBehaviour
 
     private void OnCollisionEnter(Collision collision)
     {
-        PlayerMovement player = collision.gameObject.GetComponentInParent<PlayerMovement>();
+        PlayerMovement legacyPlayer = collision.gameObject.GetComponentInParent<PlayerMovement>();
+        PaintingPlayer2DController paintingPlayer =
+            collision.gameObject.GetComponentInParent<PaintingPlayer2DController>();
 
-        if (player == null || collision.relativeVelocity.y <= 0f)
+        if ((legacyPlayer == null && paintingPlayer == null) ||
+            collision.relativeVelocity.y <= 0f)
             return;
 
-        Collider playerCollider = player.GetComponent<Collider>();
+        Collider playerCollider = paintingPlayer != null
+            ? paintingPlayer.GetComponent<Collider>()
+            : legacyPlayer.GetComponent<Collider>();
+
+        if (playerCollider == null)
+            return;
 
         for (int i = 0; i < collision.contactCount; i++)
         {

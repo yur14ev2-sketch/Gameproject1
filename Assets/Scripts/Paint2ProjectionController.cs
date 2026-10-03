@@ -14,6 +14,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
 
     [Header("Input")]
     [SerializeField] private KeyCode projectionKey = KeyCode.P;
+    [SerializeField] private BoxCollider projectionActivationArea;
 
     [Header("Paint 2 Output")]
     [SerializeField] private Transform projectionObjectsRoot;
@@ -45,11 +46,24 @@ public sealed class Paint2ProjectionController : MonoBehaviour
             return;
         }
 
+        if (!IsRoomPlayerInsideProjectionArea())
+        {
+            Debug.Log("[Paint2 Projection] P ignored: the player is outside Projection Area.", this);
+            return;
+        }
+
         ProjectVisibleSources();
     }
 
     private void ResolveReferences()
     {
+        if (projectionActivationArea == null)
+        {
+            Transform activationArea = FindSceneTransform("Projection Area");
+            if (activationArea != null)
+                projectionActivationArea = activationArea.GetComponent<BoxCollider>();
+        }
+
         if (projectionObjectsRoot == null)
             projectionObjectsRoot = FindSceneTransform("Furniture");
 
@@ -85,6 +99,24 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         projectionTargets.Clear();
         AddProjectionTarget("paint2", "Camera_Paint2", paint2Camera, paint2Model, projectedObjectsRoot);
         AddProjectionTarget("paint4", "Camera_Paint4", null, null, null);
+    }
+
+    private bool IsRoomPlayerInsideProjectionArea()
+    {
+        ResolveReferences();
+        if (projectionActivationArea == null || gameModeManager == null || gameModeManager.RoomPlayer == null)
+        {
+            Debug.LogError("[Paint2 Projection] Projection Area or room player reference is missing.", this);
+            return false;
+        }
+
+        Vector3 playerLocalPosition = projectionActivationArea.transform.InverseTransformPoint(
+            gameModeManager.RoomPlayer.position);
+        Vector3 center = projectionActivationArea.center;
+        Vector3 halfSize = projectionActivationArea.size * 0.5f;
+
+        return Mathf.Abs(playerLocalPosition.x - center.x) <= halfSize.x &&
+               Mathf.Abs(playerLocalPosition.z - center.z) <= halfSize.z;
     }
 
     private void ProjectVisibleSources()

@@ -26,6 +26,7 @@ public sealed class GameModeManager : MonoBehaviour
 
     public bool IsInsidePainting { get; private set; }
     public Camera RoomCamera => roomCamera;
+    public Transform RoomPlayer => roomPlayer;
     private PaintingEntry activePainting;
     private GameObject activePaintingPlayer;
 

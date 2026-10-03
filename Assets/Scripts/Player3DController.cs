@@ -180,6 +180,10 @@ public sealed class Player3DController : MonoBehaviour
     private void UpdateGroundContact(Collision collision)
     {
         bool isGround = false;
+        PushableExhibit pushableExhibit = collision.rigidbody != null
+            ? collision.rigidbody.GetComponent<PushableExhibit>()
+            : null;
+        bool canPushExhibit = pushableExhibit != null && pushableExhibit.CanMove(body.velocity);
         Vector3 strongestWallNormal = Vector3.zero;
         for (int i = 0; i < collision.contactCount; i++)
         {
@@ -202,7 +206,7 @@ public sealed class Player3DController : MonoBehaviour
         else
             groundContacts.Remove(collision.collider);
 
-        if (strongestWallNormal.sqrMagnitude > 0.01f)
+        if (!canPushExhibit && strongestWallNormal.sqrMagnitude > 0.01f)
             wallContacts[collision.collider] = strongestWallNormal.normalized;
         else
             wallContacts.Remove(collision.collider);

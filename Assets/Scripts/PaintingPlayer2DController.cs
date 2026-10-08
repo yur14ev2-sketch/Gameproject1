@@ -9,9 +9,14 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     [SerializeField, Min(0f)] private float moveSpeed = 8f;
     [SerializeField, Min(0f)] private float jumpHeight = 2f;
 
+    [Header("Visual Depth")]
+    [Tooltip("Moves only the red model toward the painting camera. Physics stays on the projection plane.")]
+    [SerializeField, Min(0f)] private float visualDepthOffset = 0.06f;
+
     private readonly HashSet<Collider> groundContacts = new HashSet<Collider>();
     private readonly Dictionary<Collider, Vector3> contactNormals = new Dictionary<Collider, Vector3>();
     private Rigidbody body;
+    private Transform visualRoot;
     private Vector3 movementAxis = Vector3.right;
     private float horizontalInput;
     private bool jumpRequested;
@@ -25,8 +30,10 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
+        visualRoot = transform.Find("Visual");
         body.useGravity = true;
         body.interpolation = RigidbodyInterpolation.Interpolate;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
 
         noFrictionMaterial = new PhysicMaterial("2D Player No Friction")
         {
@@ -139,6 +146,12 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
                                (Mathf.Abs(movementAxis.x) >= Mathf.Abs(movementAxis.z)
                                    ? RigidbodyConstraints.FreezePositionZ
                                    : RigidbodyConstraints.FreezePositionX);
+
+            SetVisualDepth(paintingCamera);
+        }
+        else if (visualRoot != null)
+        {
+            visualRoot.localPosition = Vector3.zero;
         }
 
         if (enabled)
@@ -221,6 +234,20 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
 
         if (noFrictionMaterial != null)
             Destroy(noFrictionMaterial);
+    }
+
+    private void SetVisualDepth(Camera paintingCamera)
+    {
+        if (visualRoot == null)
+            visualRoot = transform.Find("Visual");
+        if (visualRoot == null || paintingCamera == null)
+            return;
+
+        // The projection mesh and the physical player intentionally share one
+        // collision plane. Only the artwork is pulled toward the camera so the
+        // black silhouette cannot visually cover the red player.
+        visualRoot.position = transform.position -
+                              paintingCamera.transform.forward.normalized * visualDepthOffset;
     }
 
     private bool TryHitQuestionBlock(out Collider selectedBlock)

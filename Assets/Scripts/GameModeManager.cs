@@ -20,12 +20,19 @@ public sealed class GameModeManager : MonoBehaviour
     [SerializeField] private GameObject paintingPlayerPrefab;
     [SerializeField] private PaintingEntry[] paintings;
 
+    [Header("Projection Observation")]
+    [SerializeField] private Transform projectionInteractionPoint;
+    [SerializeField] private Camera projectionCamera;
+    [SerializeField, Min(0f)] private float projectionInteractionDistance = 10f;
+
     [Header("Painting Interaction")]
     [SerializeField] private KeyCode interactionKey = KeyCode.E;
     [SerializeField, Min(0f)] private float interactionDistance = 75f;
 
     public bool IsInsidePainting { get; private set; }
+    public bool IsProjectionViewActive { get; private set; }
     public Camera RoomCamera => roomCamera;
+    public Camera ProjectionCamera => projectionCamera;
     public Transform RoomPlayer => roomPlayer;
     private PaintingEntry activePainting;
     private GameObject activePaintingPlayer;
@@ -51,10 +58,28 @@ public sealed class GameModeManager : MonoBehaviour
         if (!Input.GetKeyDown(interactionKey))
             return;
 
+        if (IsProjectionViewActive)
+        {
+            Debug.Log("[GameMode] E detected: leaving CtrlCamera and returning to the 3D room.", this);
+            ApplyRoomMode();
+            return;
+        }
+
         if (IsInsidePainting)
         {
             Debug.Log($"[GameMode] E detected: leaving {activePainting?.paintingName} and returning to the 3D room.", this);
             ApplyRoomMode();
+            return;
+        }
+
+        if (CanEnterProjectionView())
+        {
+            float distance = GetPlanarDistance(projectionInteractionPoint);
+            Debug.Log(
+                $"[GameMode] E detected near CinecameraModel: entering CtrlCamera. " +
+                $"Planar distance = {distance:F1}.",
+                this);
+            ApplyProjectionMode();
             return;
         }
 
@@ -109,6 +134,7 @@ public sealed class GameModeManager : MonoBehaviour
     {
         ResolveRoomCamera();
         IsInsidePainting = false;
+        IsProjectionViewActive = false;
         activePainting = null;
         DestroyActivePaintingPlayer();
 
@@ -127,6 +153,7 @@ public sealed class GameModeManager : MonoBehaviour
     {
         ResolveRoomCamera();
         IsInsidePainting = true;
+        IsProjectionViewActive = false;
         activePainting = painting;
 
         if (roomPlayerSystem != null)
@@ -139,6 +166,34 @@ public sealed class GameModeManager : MonoBehaviour
 
         SetExclusiveCamera(painting.paintingCamera);
         SpawnPaintingPlayer(painting);
+    }
+
+    private bool CanEnterProjectionView()
+    {
+        if (projectionInteractionPoint == null || projectionCamera == null || roomPlayer == null)
+            return false;
+
+        return GetPlanarDistance(projectionInteractionPoint) <= projectionInteractionDistance;
+    }
+
+    private void ApplyProjectionMode()
+    {
+        ResolveRoomCamera();
+        IsInsidePainting = false;
+        IsProjectionViewActive = true;
+        activePainting = null;
+        DestroyActivePaintingPlayer();
+
+        if (roomPlayerSystem != null)
+            roomPlayerSystem.SetActive(false);
+
+        SetAllPaintingSystemsActive(false);
+        SetAllPaintingPlayersActive(false);
+        SetExclusiveCamera(projectionCamera);
+
+        Debug.Log(
+            "[GameMode] CtrlCamera mode active: 3D/2D player control disabled; P projection enabled.",
+            this);
     }
 
     private void SpawnPaintingPlayer(PaintingEntry painting)
@@ -160,9 +215,13 @@ public sealed class GameModeManager : MonoBehaviour
             return;
         }
 
+        Vector3 spawnPosition = AlignSpawnDepthToPaintingPlane(
+            painting,
+            anchor.position);
+
         activePaintingPlayer = Instantiate(
             paintingPlayerPrefab,
-            anchor.position,
+            spawnPosition,
             anchor.rotation);
         activePaintingPlayer.name = "Player_2D_Runtime";
 
@@ -177,8 +236,65 @@ public sealed class GameModeManager : MonoBehaviour
 
         controller.SetControlEnabled(true, painting.paintingCamera);
         Debug.Log(
-            $"[GameMode] Spawned the only Player_2D at {painting.paintingName}/Player2DAnchor.",
+            $"[GameMode] Spawned the only Player_2D at {painting.paintingName}/Player2DAnchor. " +
+            $"Anchor={anchor.position}, alignedSpawn={spawnPosition}.",
             activePaintingPlayer);
+    }
+
+    private static Vector3 AlignSpawnDepthToPaintingPlane(
+        PaintingEntry painting,
+        Vector3 anchorPosition)
+    {
+        if (painting == null || painting.interactionPoint == null || painting.paintingCamera == null)
+            return anchorPosition;
+
+        Vector3 planeNormal = painting.paintingCamera.transform.forward.normalized;
+        if (planeNormal.sqrMagnitude < 0.99f)
+            return anchorPosition;
+
+        // Prefer the actual enabled projection colliders. This guarantees that the
+        // player movement plane intersects the surfaces it must stand on.
+        Transform outputRoot = painting.interactionPoint.Find(
+            "PuzzleRoot/ProjectionArea/ProjectedObjects");
+        float depthSum = 0f;
+        int depthCount = 0;
+
+        if (outputRoot != null)
+        {
+            MeshCollider[] colliders = outputRoot.GetComponentsInChildren<MeshCollider>(true);
+            for (int i = 0; i < colliders.Length; i++)
+            {
+                MeshCollider candidate = colliders[i];
+                if (!candidate.enabled || candidate.sharedMesh == null)
+                    continue;
+
+                depthSum += Vector3.Dot(candidate.bounds.center, planeNormal);
+                depthCount++;
+            }
+        }
+
+        float targetDepth;
+        if (depthCount > 0)
+        {
+            targetDepth = depthSum / depthCount;
+        }
+        else
+        {
+            Transform background = painting.interactionPoint.Find("Model/BG");
+            if (background == null)
+                background = painting.interactionPoint.Find("BG");
+            if (background == null)
+                return anchorPosition;
+
+            MeshFilter backgroundMesh = background.GetComponent<MeshFilter>();
+            Vector3 backgroundCenter = backgroundMesh != null && backgroundMesh.sharedMesh != null
+                ? background.TransformPoint(backgroundMesh.sharedMesh.bounds.center)
+                : background.position;
+            targetDepth = Vector3.Dot(backgroundCenter, planeNormal);
+        }
+
+        float anchorDepth = Vector3.Dot(anchorPosition, planeNormal);
+        return anchorPosition + planeNormal * (targetDepth - anchorDepth);
     }
 
     private void DestroyActivePaintingPlayer()
@@ -225,6 +341,7 @@ public sealed class GameModeManager : MonoBehaviour
     private void SetExclusiveCamera(Camera target)
     {
         SetCameraActive(roomCamera, target == roomCamera);
+        SetCameraActive(projectionCamera, target == projectionCamera);
 
         if (paintings != null)
         {

@@ -19194,6 +19194,7 @@ MonoBehaviour:
   silhouetteDepth: 0.25
   outputViewportScale: 0.92
   silhouetteMaskResolution: 1024
+  paint2CollisionResolution: 256
   paint4CollisionResolution: 256
 --- !u!114 &2100000411
 MonoBehaviour:

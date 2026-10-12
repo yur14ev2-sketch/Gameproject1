@@ -28,6 +28,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
     [SerializeField, Min(0.01f)] private float silhouetteDepth = 0.25f;
     [SerializeField, Range(0.5f, 1f)] private float outputViewportScale = 0.92f;
     [SerializeField, Range(256, 2048)] private int silhouetteMaskResolution = 1024;
+    [SerializeField, Range(64, 512)] private int paint2CollisionResolution = 256;
     [SerializeField, Range(64, 512)] private int paint4CollisionResolution = 256;
 
     private GameModeManager gameModeManager;
@@ -164,13 +165,11 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         CreateSilhouetteMaskSurface(target, roomCamera, paintBounds);
 
         int projectedCount = 0;
+        bool isPaint2 = target.Name == "paint2";
         bool isPaint4 = target.Name == "paint4";
 
-        for (int sourceIndex = 0; sourceIndex < projectionObjectsRoot.childCount; sourceIndex++)
+        foreach (Transform sourceTransform in visibleSources)
         {
-            Transform sourceTransform = projectionObjectsRoot.GetChild(sourceIndex);
-            if (!visibleSources.Contains(sourceTransform))
-                continue;
             if (!sourceTransform.gameObject.activeInHierarchy)
                 continue;
 
@@ -193,11 +192,11 @@ public sealed class Paint2ProjectionController : MonoBehaviour
             Color color = settings != null ? settings.SilhouetteColor : new Color(0.08f, 0.08f, 0.08f, 1f);
             bool generateCollider = settings == null || settings.GenerateCollider;
             Vector3 positionOffset = settings != null ? settings.PositionOffset : Vector3.zero;
-            // Paint 4's visible result is the final occlusion-aware mask on BG.
-            // Its collision is built once from that same mask after all sources
+            // Paint 2/4 use the final occlusion-aware mask shown on their BG.
+            // Their collision is built once from that same mask after all sources
             // have been evaluated; projecting each source mesh separately would
             // reintroduce hidden/internal collision surfaces.
-            if (isPaint4)
+            if (isPaint2 || isPaint4)
             {
                 projectedCount++;
                 continue;
@@ -208,6 +207,10 @@ public sealed class Paint2ProjectionController : MonoBehaviour
                     target.Background, target.OutputRoot, false))
                 projectedCount++;
         }
+
+        if (isPaint2 && projectedCount > 0 &&
+            !CreatePaint2MaskCollision(target, roomCamera, paintBounds))
+            Debug.LogError("[Painting Projection] Paint 2 mask collision could not be built.", this);
 
         if (isPaint4 && projectedCount > 0 &&
             !CreatePaint4MaskCollision(target, roomCamera, paintBounds))
@@ -222,17 +225,32 @@ public sealed class Paint2ProjectionController : MonoBehaviour
     private HashSet<Transform> CollectEnabledProjectionSources()
     {
         var visibleSources = new HashSet<Transform>();
-
-        for (int sourceIndex = 0; sourceIndex < projectionObjectsRoot.childCount; sourceIndex++)
-        {
-            Transform source = projectionObjectsRoot.GetChild(sourceIndex);
-            ProjectionSource settings = source.GetComponent<ProjectionSource>();
-            if (!source.gameObject.activeInHierarchy || settings == null || !settings.ProjectionEnabled)
-                continue;
-            visibleSources.Add(source);
-        }
-
+        CollectEnabledProjectionSourcesRecursive(projectionObjectsRoot, visibleSources);
         return visibleSources;
+    }
+
+    private static void CollectEnabledProjectionSourcesRecursive(
+        Transform parent,
+        HashSet<Transform> visibleSources)
+    {
+        for (int childIndex = 0; childIndex < parent.childCount; childIndex++)
+        {
+            Transform child = parent.GetChild(childIndex);
+            if (!child.gameObject.activeInHierarchy)
+                continue;
+
+            ProjectionSource settings = child.GetComponent<ProjectionSource>();
+            if (settings != null)
+            {
+                // A ProjectionSource owns its whole subtree. Do not also collect nested
+                // ProjectionSources, otherwise the same renderers would be projected twice.
+                if (settings.ProjectionEnabled)
+                    visibleSources.Add(child);
+                continue;
+            }
+
+            CollectEnabledProjectionSourcesRecursive(child, visibleSources);
+        }
     }
 
     private bool CreateProjectedMesh(
@@ -349,10 +367,38 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         return true;
     }
 
+    private bool CreatePaint2MaskCollision(
+        ProjectionTarget target,
+        Camera roomCamera,
+        Bounds paintBounds)
+    {
+        return CreateMaskCollisionFromBackground(
+            target,
+            roomCamera,
+            paintBounds,
+            paint2CollisionResolution,
+            "Paint2");
+    }
+
     private bool CreatePaint4MaskCollision(
         ProjectionTarget target,
         Camera roomCamera,
         Bounds paintBounds)
+    {
+        return CreateMaskCollisionFromBackground(
+            target,
+            roomCamera,
+            paintBounds,
+            paint4CollisionResolution,
+            "Paint4");
+    }
+
+    private bool CreateMaskCollisionFromBackground(
+        ProjectionTarget target,
+        Camera roomCamera,
+        Bounds paintBounds,
+        int collisionResolution,
+        string displayName)
     {
         if (silhouetteMask == null || target.OutputRoot == null || target.Camera == null)
             return false;
@@ -373,7 +419,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         float verticalLength = Mathf.Max(
             0.001f,
             0.5f * ((topLeft - bottomLeft).magnitude + (topRight - bottomRight).magnitude));
-        int gridWidth = paint4CollisionResolution;
+        int gridWidth = collisionResolution;
         int gridHeight = Mathf.Clamp(
             Mathf.RoundToInt(gridWidth * verticalLength / horizontalLength),
             32,
@@ -487,7 +533,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         if (triangles.Count == 0)
             return false;
 
-        Mesh collisionMesh = new Mesh { name = "Paint4MaskCollision" };
+        Mesh collisionMesh = new Mesh { name = $"{displayName}MaskCollision" };
         if (vertices.Count > 65535)
             collisionMesh.indexFormat = UnityEngine.Rendering.IndexFormat.UInt32;
         collisionMesh.SetVertices(vertices);
@@ -513,7 +559,7 @@ public sealed class Paint2ProjectionController : MonoBehaviour
             oldTopSupport.enabled = false;
 
         Debug.Log(
-            $"[Painting Projection] Paint 4 collision matched to BG mask: " +
+            $"[Painting Projection] {displayName} collision matched to BG mask: " +
             $"grid={gridWidth}x{gridHeight}, occupied={occupiedCount}, " +
             $"boundaryTriangles={triangles.Count / 3}.",
             this);
@@ -911,11 +957,8 @@ public sealed class Paint2ProjectionController : MonoBehaviour
         var originalLayers = new Dictionary<GameObject, int>();
         var originalMaterials = new Dictionary<Renderer, Material[]>();
         Material maskMaterial = new Material(maskShader);
-        for (int sourceIndex = 0; sourceIndex < projectionObjectsRoot.childCount; sourceIndex++)
+        foreach (Transform source in visibleSources)
         {
-            Transform source = projectionObjectsRoot.GetChild(sourceIndex);
-            if (!visibleSources.Contains(source))
-                continue;
             ProjectionSource settings = source.GetComponent<ProjectionSource>();
             if (!source.gameObject.activeInHierarchy || settings == null || !settings.ProjectionEnabled)
                 continue;

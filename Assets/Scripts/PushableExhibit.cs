@@ -45,6 +45,7 @@ public sealed class PushableExhibit : MonoBehaviour
         exhibitBody.mass = mass;
         exhibitBody.drag = movementResistance;
         exhibitBody.angularDrag = movementResistance;
+        exhibitBody.useGravity = false;
         exhibitBody.interpolation = RigidbodyInterpolation.Interpolate;
         exhibitBody.collisionDetectionMode = CollisionDetectionMode.ContinuousSpeculative;
         exhibitBody.constraints = RigidbodyConstraints.FreezePositionY |
@@ -90,10 +91,13 @@ public sealed class PushableExhibit : MonoBehaviour
             axisVelocity = 0f;
         }
 
-        Vector3 position = lockedPerpendicularPosition + movementAxis * currentTravel;
-        position.y = lockedWorldY;
-        exhibitBody.MoveRotation(lockedWorldRotation);
-        exhibitBody.MovePosition(position);
+        Vector3 correctedPosition = lockedPerpendicularPosition + movementAxis * currentTravel;
+        correctedPosition.y = lockedWorldY;
+        if ((correctedPosition - exhibitBody.position).sqrMagnitude > 0.000001f)
+            exhibitBody.MovePosition(correctedPosition);
+
+        if (Quaternion.Angle(exhibitBody.rotation, lockedWorldRotation) > 0.01f)
+            exhibitBody.MoveRotation(lockedWorldRotation);
 
         axisVelocity = Mathf.Clamp(axisVelocity, -maximumSpeed, maximumSpeed);
         exhibitBody.velocity = movementAxis * axisVelocity;

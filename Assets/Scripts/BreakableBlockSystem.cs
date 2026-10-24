@@ -3,6 +3,10 @@ using UnityEngine;
 [DisallowMultipleComponent]
 public sealed class BreakableBlockSystem : MonoBehaviour
 {
+    [Header("Break Detection")]
+    [SerializeField, Min(0.01f)] private float minimumUpwardSpeed = 0.1f;
+    [SerializeField, Min(0f)] private float undersideTolerance = 0.03f;
+
     private void Awake()
     {
         Rigidbody systemBody = GetComponent<Rigidbody>();
@@ -21,15 +25,23 @@ public sealed class BreakableBlockSystem : MonoBehaviour
         PaintingPlayer2DController paintingPlayer =
             collision.gameObject.GetComponentInParent<PaintingPlayer2DController>();
 
-        if ((legacyPlayer == null && paintingPlayer == null) ||
-            collision.relativeVelocity.y <= 0f)
+        if (legacyPlayer == null && paintingPlayer == null)
             return;
 
-        Collider playerCollider = paintingPlayer != null
-            ? paintingPlayer.GetComponent<Collider>()
-            : legacyPlayer.GetComponent<Collider>();
+        Component player = paintingPlayer != null ? paintingPlayer : legacyPlayer;
+        Collider playerCollider = player.GetComponent<Collider>();
+        Rigidbody playerBody = player.GetComponent<Rigidbody>();
 
-        if (playerCollider == null)
+        if (playerCollider == null || playerBody == null)
+            return;
+
+        // Unity may already have reduced the rigidbody velocity by the time
+        // OnCollisionEnter runs, so retain the pre-solve impact speed too.
+        float verticalImpactSpeed = Mathf.Max(
+            playerBody.velocity.y,
+            Mathf.Abs(collision.relativeVelocity.y));
+
+        if (verticalImpactSpeed < minimumUpwardSpeed)
             return;
 
         for (int i = 0; i < collision.contactCount; i++)
@@ -40,19 +52,39 @@ public sealed class BreakableBlockSystem : MonoBehaviour
             if (blockCollider == null)
                 continue;
 
+            GameObject managedBlock = GetDirectChildBlock(blockCollider.transform);
+            if (managedBlock == null)
+                continue;
+
+            Bounds playerBounds = playerCollider.bounds;
+            Bounds blockBounds = blockCollider.bounds;
             bool playerIsBelowBlock =
-                playerCollider.bounds.center.y < blockCollider.bounds.center.y;
+                playerBounds.center.y < blockBounds.center.y &&
+                playerBounds.max.y <= blockBounds.center.y;
             bool hitBlockUnderside =
-                contact.point.y <= blockCollider.bounds.center.y;
+                contact.point.y <= blockBounds.min.y + undersideTolerance;
 
             if (!playerIsBelowBlock || !hitBlockUnderside)
                 continue;
 
-            GameObject block = blockCollider.gameObject;
-            block.SetActive(false);
-            Destroy(block);
+            // Disable immediately so this collision cannot be reported again
+            // before Unity performs the end-of-frame destruction.
+            managedBlock.SetActive(false);
+            Destroy(managedBlock);
             return;
         }
+    }
+
+    private GameObject GetDirectChildBlock(Transform hitTransform)
+    {
+        if (hitTransform == null || !hitTransform.IsChildOf(transform))
+            return null;
+
+        Transform current = hitTransform;
+        while (current.parent != null && current.parent != transform)
+            current = current.parent;
+
+        return current.parent == transform ? current.gameObject : null;
     }
 
     private Collider GetSystemCollider(ContactPoint contact)

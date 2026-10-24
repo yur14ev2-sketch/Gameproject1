@@ -31,6 +31,10 @@ public sealed class CoinSystem : MonoBehaviour
     private Collider playerCollider;
     private CoinCounterUI coinCounterUi;
     private int collectedCoinCount;
+    private int poppedCoinCount;
+
+    public int CollectedCoinCount => collectedCoinCount;
+    public int PoppedCoinCount => poppedCoinCount;
 
     private void Awake()
     {
@@ -78,6 +82,7 @@ public sealed class CoinSystem : MonoBehaviour
             return false;
 
         entry.HasPopped = true;
+        poppedCoinCount++;
         SetQuestionBlockUsed(entry);
         StartCoroutine(PopCoin(entry));
         return true;

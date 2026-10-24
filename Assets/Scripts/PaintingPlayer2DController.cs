@@ -13,6 +13,10 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     [Tooltip("Moves only the red model toward the painting camera. Physics stays on the projection plane.")]
     [SerializeField, Min(0f)] private float visualDepthOffset = 0.06f;
 
+    [Header("Ground Detection")]
+    [Tooltip("Extra distance checked below the feet. This keeps jumps stable at platform seams.")]
+    [SerializeField, Min(0.01f)] private float groundProbeDistance = 0.08f;
+
     private readonly HashSet<Collider> groundContacts = new HashSet<Collider>();
     private readonly Dictionary<Collider, Vector3> contactNormals = new Dictionary<Collider, Vector3>();
     private Rigidbody body;
@@ -24,12 +28,14 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     private bool ceilingHitRequested;
     private bool controlEnabled;
     private PhysicMaterial noFrictionMaterial;
+    private Collider playerCollider;
     private float blockedTimer;
     private float nextBlockedLogTime;
 
     private void Awake()
     {
         body = GetComponent<Rigidbody>();
+        playerCollider = GetComponent<Collider>();
         visualRoot = transform.Find("Visual");
         body.useGravity = true;
         body.interpolation = RigidbodyInterpolation.Interpolate;
@@ -75,7 +81,10 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
         velocity = movementAxis * (horizontalInput * moveSpeed);
         velocity.y = verticalVelocity;
 
-        if (jumpRequested && groundContacts.Count > 0)
+        groundContacts.RemoveWhere(contact =>
+            contact == null || !contact.enabled || !contact.gameObject.activeInHierarchy);
+
+        if (jumpRequested && IsGrounded())
         {
             velocity.y = Mathf.Sqrt(2f * Mathf.Abs(Physics.gravity.y) * jumpHeight);
             isRising = true;
@@ -86,13 +95,9 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
         if (isRising)
         {
             if (TryHitQuestionBlock(out Collider questionBlock))
-            {
                 TryActivateQuestionBlock(questionBlock);
-                velocity.y = Mathf.Min(velocity.y, 0f);
-                isRising = false;
-                ceilingHitRequested = false;
-            }
-            else if (ceilingHitRequested)
+
+            if (ceilingHitRequested)
             {
                 velocity.y = Mathf.Min(velocity.y, 0f);
                 isRising = false;
@@ -138,6 +143,8 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
 
         if (enabled && paintingCamera != null)
         {
+            PreparePaintingCollisions(paintingCamera);
+
             movementAxis = paintingCamera.transform.right;
             movementAxis.y = 0f;
             movementAxis.Normalize();
@@ -183,6 +190,140 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     {
         groundContacts.Remove(collision.collider);
         contactNormals.Remove(collision.collider);
+    }
+
+    private bool IsGrounded()
+    {
+        if (groundContacts.Count > 0)
+            return true;
+
+        if (playerCollider == null)
+            playerCollider = GetComponent<Collider>();
+        if (playerCollider == null)
+            return false;
+
+        Bounds bounds = playerCollider.bounds;
+        Vector3 lateralOffset = movementAxis.normalized * bounds.extents.magnitude * 0.45f;
+        Vector3 origin = bounds.center;
+        origin.y = bounds.min.y + 0.015f;
+        float distance = groundProbeDistance + 0.015f;
+
+        return HasWalkableGround(origin, distance) ||
+               HasWalkableGround(origin + lateralOffset, distance) ||
+               HasWalkableGround(origin - lateralOffset, distance);
+    }
+
+    private bool HasWalkableGround(Vector3 origin, float distance)
+    {
+        RaycastHit[] hits = Physics.RaycastAll(
+            origin,
+            Vector3.down,
+            distance,
+            ~0,
+            QueryTriggerInteraction.Ignore);
+
+        for (int i = 0; i < hits.Length; i++)
+        {
+            Collider candidate = hits[i].collider;
+            if (candidate == null || candidate == playerCollider ||
+                candidate.transform.IsChildOf(transform))
+            {
+                continue;
+            }
+
+            if (hits[i].normal.y > 0.5f)
+                return true;
+        }
+
+        return false;
+    }
+
+    private static void PreparePaintingCollisions(Camera paintingCamera)
+    {
+        Transform paintingRoot = FindPaintingRoot(paintingCamera.transform);
+        if (paintingRoot == null)
+            return;
+
+        Collider[] colliders = paintingRoot.GetComponentsInChildren<Collider>(true);
+        bool isPaint1 = string.Equals(
+            paintingRoot.name,
+            "paint1",
+            System.StringComparison.OrdinalIgnoreCase);
+
+        for (int i = 0; i < colliders.Length; i++)
+        {
+            Collider candidate = colliders[i];
+            if (candidate == null)
+                continue;
+
+            Transform owner = candidate.transform;
+
+            // Painting backgrounds are visual planes. Their coplanar mesh
+            // colliders create constant side contacts with the 2D player.
+            if (HasNamedAncestor(owner, paintingRoot, "background"))
+            {
+                candidate.enabled = false;
+                continue;
+            }
+
+            // A rectangular block needs only its BoxCollider. Keeping an
+            // overlapping MeshCollider produces duplicate enter/exit events.
+            if (candidate is MeshCollider &&
+                owner.TryGetComponent(out BoxCollider boxCollider) &&
+                boxCollider.enabled)
+            {
+                candidate.enabled = false;
+                continue;
+            }
+
+            // Paint 1's concealed route deliberately keeps its artwork while
+            // allowing the player through the cover block.
+            if (isPaint1 && HasNamedAncestor(owner, paintingRoot, "block2 (32)"))
+                candidate.enabled = false;
+        }
+    }
+
+    private static Transform FindPaintingRoot(Transform start)
+    {
+        Transform current = start;
+        while (current != null)
+        {
+            if (current.name.StartsWith(
+                    "paint",
+                    System.StringComparison.OrdinalIgnoreCase))
+            {
+                return current;
+            }
+
+            current = current.parent;
+        }
+
+        return start != null ? start.parent : null;
+    }
+
+    private static bool HasNamedAncestor(
+        Transform start,
+        Transform stopAt,
+        string expectedName)
+    {
+        Transform current = start;
+        while (current != null)
+        {
+            if (string.Equals(
+                    current.name,
+                    expectedName,
+                    System.StringComparison.OrdinalIgnoreCase))
+            {
+                return true;
+            }
+
+            if (current == stopAt)
+                break;
+
+            current = current.parent;
+        }
+
+        return false;
     }
 
     private void EvaluateGround(Collision collision)
@@ -253,8 +394,8 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
     private bool TryHitQuestionBlock(out Collider selectedBlock)
     {
         selectedBlock = null;
-        Collider playerCollider = GetComponent<Collider>();
-
+        if (playerCollider == null)
+            playerCollider = GetComponent<Collider>();
         if (playerCollider == null)
             return false;
 
@@ -303,15 +444,17 @@ public sealed class PaintingPlayer2DController : MonoBehaviour
         return selectedBlock != null;
     }
 
-    private void TryActivateQuestionBlock(Collider questionBlock)
+    private bool TryActivateQuestionBlock(Collider questionBlock)
     {
         CoinSystem[] coinSystems = FindObjectsOfType<CoinSystem>(true);
 
         for (int i = 0; i < coinSystems.Length; i++)
         {
             if (coinSystems[i].TryPopCoin(questionBlock))
-                return;
+                return true;
         }
+
+        return false;
     }
 
     private void RegisterWithCoinSystems()
